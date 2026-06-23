@@ -20,6 +20,8 @@ else
 	RUYI_LINK="https://mirror.iscas.ac.cn/ruyisdk/ruyi/releases/${RUYI_VERSION}/ruyi.${RUYI_ARCH}"
 fi
 
+RUYI_LINK="https://github.com/ruyisdk/ruyi/releases/download/${RUYI_VERSION}/ruyi-${RUYI_VERSION}.${RUYI_ARCH}"
+
 if wget --help > /dev/null; then
 	wget $RUYI_LINK -O /usr/bin/ruyi
 elif curl --help > /dev/null; then
