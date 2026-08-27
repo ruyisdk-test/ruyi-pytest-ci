@@ -1,0 +1,91 @@
+name: Ruyi Pytest (macOS)
+
+on:
+  workflow_dispatch:
+    inputs:
+      ruyi_version:
+        description: "RUYI_VERSION to test"
+        required: true
+        default: "0.52.0-beta.20260824"
+
+jobs:
+  pytest-macos:
+    runs-on: macos-14
+
+    env:
+      RUYI_REPO: ISCAS
+      RUYI_VERSION: ${{ inputs.ruyi_version }}
+
+    steps:
+      - name: Checkout ruyi-pytest
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: true
+
+      - name: Verify runner architecture
+        run: |
+          test "$(uname -s)" = "Darwin"
+          test "$(uname -m)" = "arm64"
+
+      - name: Install archive dependencies
+        run: |
+          brew install lz4 xz zstd
+          for package in lz4 xz zstd; do
+            echo "$(brew --prefix "$package")/bin" >> "$GITHUB_PATH"
+          done
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Ruyi test dependencies
+        run: |
+          python -m venv "$RUNNER_TEMP/ruyi-pytest-venv"
+          "$RUNNER_TEMP/ruyi-pytest-venv/bin/pip" install \
+            --disable-pip-version-check \
+            "pexpect>=4.9.0" \
+            "pytest>=9.0.3" \
+            "pytest-env>=1.6.0"
+
+      - name: Install standalone Ruyi
+        run: |
+          set -euo pipefail
+          case "$RUYI_VERSION" in
+            *-*) channel=testing ;;
+            *) channel=releases ;;
+          esac
+          asset="ruyi-${RUYI_VERSION}.macos-arm64"
+          install_dir="$RUNNER_TEMP/ruyi-bin"
+          install_path="$install_dir/ruyi"
+          mkdir -p "$install_dir"
+
+          iscas_url="https://mirror.iscas.ac.cn/ruyisdk/ruyi/${channel}/${RUYI_VERSION}/${asset}"
+          github_url="https://github.com/ruyisdk/ruyi/releases/download/${RUYI_VERSION}/${asset}"
+          if ! curl --fail --location --silent --show-error --retry 3 \
+              --retry-delay 2 "$iscas_url" -o "$install_path"; then
+            curl --fail --location --silent --show-error --retry 3 \
+              --retry-delay 2 "$github_url" -o "$install_path"
+          fi
+          chmod +x "$install_path"
+          "$install_path" --version
+          echo "$install_dir" >> "$GITHUB_PATH"
+
+      - name: Run pytest in English
+        working-directory: ruyi-pytest
+        env:
+          LANG: en_US.UTF-8
+          LC_ALL: en_US.UTF-8
+        run: |
+          export PATH="$RUNNER_TEMP/ruyi-bin:$PATH"
+          "$RUNNER_TEMP/ruyi-pytest-venv/bin/python" -m pytest -ra
+
+      - name: Run pytest in Chinese
+        working-directory: ruyi-pytest
+        env:
+          LANG: zh_CN.UTF-8
+          LC_ALL: zh_CN.UTF-8
+        run: |
+          export PATH="$RUNNER_TEMP/ruyi-bin:$PATH"
+          "$RUNNER_TEMP/ruyi-pytest-venv/bin/python" -m pytest -ra
