@@ -7,6 +7,10 @@ on:
         description: "RUYI_VERSION to test"
         required: true
         default: "0.52.0-beta.20260824"
+      test_start_time:
+        description: "TEST_START_TIME (YYYYMMDD)"
+        required: true
+        default: "20260520"
 
 jobs:
   pytest-macos:
@@ -15,6 +19,7 @@ jobs:
     env:
       RUYI_REPO: ISCAS
       RUYI_VERSION: ${{ inputs.ruyi_version }}
+      TEST_START_TIME: ${{ inputs.test_start_time }}
 
     steps:
       - name: Checkout ruyi-pytest
@@ -23,6 +28,10 @@ jobs:
           fetch-depth: 0
           submodules: true
 
+      - name: Prepare test artifacts
+        run: |
+          mkdir -p artifacts/macos-arm64
+
       - name: Verify runner architecture
         run: |
           test "$(uname -s)" = "Darwin"
@@ -30,9 +39,17 @@ jobs:
 
       - name: Install archive dependencies
         run: |
+          set -euo pipefail
           brew install lz4 xz zstd
           for package in lz4 xz zstd; do
             echo "$(brew --prefix "$package")/bin" >> "$GITHUB_PATH"
+          done
+
+      - name: Verify test dependencies
+        run: |
+          set -euo pipefail
+          for command in bash bzip2 gunzip lz4 make tar unzip xz zstd; do
+            command -v "$command"
           done
 
       - name: Set up Python
@@ -42,6 +59,7 @@ jobs:
 
       - name: Install Ruyi test dependencies
         run: |
+          set -euo pipefail
           python -m venv "$RUNNER_TEMP/ruyi-pytest-venv"
           "$RUNNER_TEMP/ruyi-pytest-venv/bin/pip" install \
             --disable-pip-version-check \
@@ -69,23 +87,152 @@ jobs:
               --retry-delay 2 "$github_url" -o "$install_path"
           fi
           chmod +x "$install_path"
-          "$install_path" --version
+          version_output="$("$install_path" --version)"
+          printf '%s\n' "$version_output"
+          actual_version="$(printf '%s\n' "$version_output" | awk '/^Ruyi / { print $2; exit }')"
+          test "$actual_version" = "$RUYI_VERSION"
           echo "$install_dir" >> "$GITHUB_PATH"
 
+      - name: Verify Ruyi executable selection
+        run: |
+          set -euo pipefail
+          test "$(command -v ruyi)" = "$RUNNER_TEMP/ruyi-bin/ruyi"
+          ruyi --version
+
+      - name: Record runner information
+        if: always()
+        run: |
+          mkdir -p artifacts/macos-arm64
+          {
+            echo "date=$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+            echo "user=$(whoami)"
+            echo "working_directory=$(pwd)"
+            echo "system=$(uname -s)"
+            echo "release=$(uname -r)"
+            echo "architecture=$(uname -m)"
+            sw_vers
+            echo "Ruyi version:"
+            "$RUNNER_TEMP/ruyi-bin/ruyi" --version 2>&1 || true
+            echo "Python version:"
+            "$RUNNER_TEMP/ruyi-pytest-venv/bin/python" --version 2>&1
+            echo "Locale:"
+            locale 2>&1 || true
+            echo "PATH=$PATH"
+            echo "RUYI_REPO=$RUYI_REPO"
+            echo "RUYI_VERSION=$RUYI_VERSION"
+            echo "TEST_START_TIME=$TEST_START_TIME"
+            echo "Disk usage:"
+            df -h .
+          } | tee artifacts/macos-arm64/runner-info.log
+
       - name: Run pytest in English
+        id: pytest_en
+        continue-on-error: true
         working-directory: ruyi-pytest
         env:
           LANG: en_US.UTF-8
           LC_ALL: en_US.UTF-8
+          LC_CTYPE: en_US.UTF-8
         run: |
+          set +e
           export PATH="$RUNNER_TEMP/ruyi-bin:$PATH"
-          "$RUNNER_TEMP/ruyi-pytest-venv/bin/python" -m pytest -ra
+          log="$GITHUB_WORKSPACE/artifacts/macos-arm64/pytest.en_US.log"
+          exit_code_file="$GITHUB_WORKSPACE/artifacts/macos-arm64/pytest.en_US.exitcode"
+          "$RUNNER_TEMP/ruyi-pytest-venv/bin/python" -m pytest -ra 2>&1 | tee "$log"
+          status=${PIPESTATUS[0]}
+          printf '\nexit code: %s\n' "$status" | tee -a "$log"
+          printf '%s\n' "$status" > "$exit_code_file"
+          exit "$status"
 
       - name: Run pytest in Chinese
+        id: pytest_zh
+        continue-on-error: true
         working-directory: ruyi-pytest
         env:
           LANG: zh_CN.UTF-8
           LC_ALL: zh_CN.UTF-8
+          LC_CTYPE: zh_CN.UTF-8
         run: |
+          set +e
           export PATH="$RUNNER_TEMP/ruyi-bin:$PATH"
-          "$RUNNER_TEMP/ruyi-pytest-venv/bin/python" -m pytest -ra
+          log="$GITHUB_WORKSPACE/artifacts/macos-arm64/pytest.zh_CN.log"
+          exit_code_file="$GITHUB_WORKSPACE/artifacts/macos-arm64/pytest.zh_CN.exitcode"
+          "$RUNNER_TEMP/ruyi-pytest-venv/bin/python" -m pytest -ra 2>&1 | tee "$log"
+          status=${PIPESTATUS[0]}
+          printf '\nexit code: %s\n' "$status" | tee -a "$log"
+          printf '%s\n' "$status" > "$exit_code_file"
+          exit "$status"
+
+      - name: Generate macOS test report
+        if: always()
+        env:
+          REPORT_DIR: ${{ github.workspace }}/artifacts/macos-arm64
+          PYTEST_CI_COMMIT: ${{ github.sha }}
+        run: |
+          mkdir -p "$REPORT_DIR"
+          export PYTEST_COMMIT="$(git -C ruyi-pytest rev-parse HEAD 2>/dev/null || true)"
+          export REPORTS_COMMIT="$(git -C ruyi-pytest-reports rev-parse HEAD 2>/dev/null || true)"
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          report_dir = Path(os.environ["REPORT_DIR"])
+
+          def read_file(name: str, missing: str = "(not available)") -> str:
+              path = report_dir / name
+              if not path.is_file():
+                  return missing
+              return path.read_text(encoding="utf-8", errors="replace").rstrip()
+
+          def exit_code(name: str) -> str:
+              value = read_file(name)
+              return value.splitlines()[0] if value != "(not available)" else value
+
+          report = [
+              "# RUYI 包管理 macOS arm64 测试结果",
+              "",
+              f"- Ruyi 版本：`{os.environ.get('RUYI_VERSION', '')}`",
+              f"- 测试开始时间：`{os.environ.get('TEST_START_TIME', '')}`",
+              f"- ruyi-pytest-ci 提交：`{os.environ.get('PYTEST_CI_COMMIT', '')}`",
+              f"- ruyi-pytest 提交：`{os.environ.get('PYTEST_COMMIT', '')}`",
+              f"- ruyi-pytest-reports 提交：`{os.environ.get('REPORTS_COMMIT', '')}`",
+              "",
+              "## 测试环境",
+              "",
+              "```text",
+              read_file("runner-info.log"),
+              "```",
+              "",
+              f"英文测试退出码：`{exit_code('pytest.en_US.exitcode')}`",
+              "",
+              "## 英文测试日志",
+              "",
+              "```text",
+              read_file("pytest.en_US.log"),
+              "```",
+              "",
+              f"中文测试退出码：`{exit_code('pytest.zh_CN.exitcode')}`",
+              "",
+              "## 中文测试日志",
+              "",
+              "```text",
+              read_file("pytest.zh_CN.log"),
+              "```",
+              "",
+          ]
+          (report_dir / "RUYI_包管理_macOS_arm64_测试结果.md").write_text(
+              "\n".join(report), encoding="utf-8"
+          )
+          PY
+
+      - name: Upload macOS test artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ruyi-pytest-macos-arm64
+          path: artifacts/macos-arm64
+          if-no-files-found: error
+
+      - name: Fail if pytest failed
+        if: ${{ always() && (steps.pytest_en.outcome == 'failure' || steps.pytest_zh.outcome == 'failure') }}
+        run: exit 1
