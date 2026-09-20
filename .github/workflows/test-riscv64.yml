@@ -11,6 +11,14 @@ on:
         description: "TEST_START_TIME (YYYYMMDD)"
         required: true
         default: "20260520"
+      pytest_repo:
+        description: "Optional ruyi-pytest repository"
+        required: false
+        default: "ruyisdk-test/ruyi-pytest"
+      pytest_ref:
+        description: "Optional ruyi-pytest ref"
+        required: false
+        default: ""
 
 jobs:
   pytest-riscv64:
@@ -45,6 +53,14 @@ jobs:
         with:
           fetch-depth: 0
           submodules: true
+
+      - name: Checkout custom ruyi-pytest
+        if: ${{ inputs.pytest_ref != '' }}
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.pytest_repo }}
+          ref: ${{ inputs.pytest_ref }}
+          path: ruyi-pytest
 
       - name: Set up QEMU for multi-arch emulation
         uses: docker/setup-qemu-action@v2
