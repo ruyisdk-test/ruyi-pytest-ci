@@ -17,7 +17,6 @@ jobs:
     runs-on: macos-14
 
     env:
-      RUYI_REPO: ISCAS
       RUYI_VERSION: ${{ inputs.ruyi_version }}
       TEST_START_TIME: ${{ inputs.test_start_time }}
 
@@ -27,6 +26,18 @@ jobs:
         with:
           fetch-depth: 0
           submodules: true
+
+      - name: Select packages-index mirror
+        run: |
+          set -euo pipefail
+          iscas_repo="https://mirror.iscas.ac.cn/git/ruyisdk/packages-index.git"
+          if git ls-remote "$iscas_repo" HEAD >/dev/null 2>&1; then
+            echo "RUYI_REPO=ISCAS" >> "$GITHUB_ENV"
+            echo "Using ISCAS packages-index mirror"
+          else
+            echo "RUYI_REPO=" >> "$GITHUB_ENV"
+            echo "::warning::ISCAS packages-index mirror is unavailable; falling back to the default upstream"
+          fi
 
       - name: Prepare test artifacts
         run: |
