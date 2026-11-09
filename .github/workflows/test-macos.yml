@@ -14,7 +14,7 @@ on:
 
 jobs:
   pytest-macos:
-    runs-on: macos-14
+    runs-on: macos-26
 
     env:
       RUYI_VERSION: ${{ inputs.ruyi_version }}
